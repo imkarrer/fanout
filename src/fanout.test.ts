@@ -133,6 +133,39 @@ test("seed records everything as done without a single request", () => {
   assert.ok(lines.every((l) => l.status === "seeded"));
 });
 
+test("plan: --only d plans only target d", () => {
+  const { config, ledger } = setup({ d: { type: "discord" }, s: { type: "slack" } });
+  const items = itemsFromFeed(feed([item("a", true)]));
+  const p = plan(config, items, ledger, ["d"]);
+  assert.deepEqual(p.map((x) => `${x.target}:${x.item.id}`), ["d:a"]);
+});
+
+test("plan: --only on a disabled target plans it", () => {
+  const { config, ledger } = setup({ d: { type: "discord", enabled: false }, s: { type: "slack" } });
+  const items = itemsFromFeed(feed([item("a", true)]));
+  const p = plan(config, items, ledger, ["d"]);
+  assert.deepEqual(p.map((x) => `${x.target}:${x.item.id}`), ["d:a"]);
+});
+
+test("plan: an unknown --only name throws an error naming the configured targets", () => {
+  const { config } = setup({ d: { type: "discord" }, s: { type: "slack" } });
+  const items = itemsFromFeed(feed([item("a", true)]));
+  try {
+    plan(config, items, new Ledger(config.ledger), ["unknown"]);
+    assert.fail("Should have thrown");
+  } catch (e) {
+    assert.ok((e as Error).message.includes("unknown target(s): unknown"));
+    assert.ok((e as Error).message.includes("Known targets: d, s"));
+  }
+});
+
+test("plan: no --only keeps today's behaviour (disabled targets skipped)", () => {
+  const { config, ledger } = setup({ d: { type: "discord" }, s: { type: "slack", enabled: false } });
+  const items = itemsFromFeed(feed([item("a", true), item("bb", true)]));
+  const p = plan(config, items, ledger);
+  assert.deepEqual(p.map((x) => `${x.target}:${x.item.id}`), ["d:a", "d:bb"]);
+});
+
 test("problems: a missing or malformed secret blocks a target, by name", () => {
   const { config } = setup();
   assert.deepEqual(problems(config, {}), { d: ["D is not set"], s: ["S is not set"] });
