@@ -9,18 +9,19 @@ import { TARGETS } from "./targets/index.ts";
 const USAGE = `fanout: announce what a site publishes, everywhere it should go.
 
   fanout plan            what would be posted, and where (default; changes nothing)
-  fanout run             the same, but only says what it would do...
-  fanout run --live      ...until --live: post, and record each delivery
-  fanout seed            record everything pending as done without posting
-                         (run once when adopting fanout on a site with history)
-  fanout targets         each target and whether it could post live right now
-  fanout login <target>  sign in once in a target's own browser profile
-                         (facebook-group; waits until that browser is closed)
+  fanout run             the same, as a dry run...
+  fanout run --live      ...post, and record each delivery
+  fanout seed            record everything pending as done, posting nothing
+  fanout targets         which targets could post live right now, and why not
+  fanout login <target>  sign in once in a browser target's own profile (facebook-group)
 
 Options:
   --config FILE   the project's fanout.json (default ./fanout.json)
   --source URL    read this feed instead of the config's source (a URL or file)
   --ledger FILE   use this ledger instead of the config's
+  --only TARGET   only consider this target (repeatable); runs even if disabled
+  --live          post the announcements (default: dry run)
+  --help          show this help
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -33,6 +34,7 @@ async function main(argv: string[]): Promise<number> {
       ledger: { type: "string" },
       live: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
+      only: { type: "string", multiple: true },
     },
   });
   const cmd = positionals[0] ?? "plan";
@@ -69,7 +71,7 @@ async function main(argv: string[]): Promise<number> {
 
   const items = await loadFeed(values.source ?? config.source.url, config.base);
   const ledger = new Ledger(config.ledger);
-  const pending = plan(config, items, ledger);
+  const pending = plan(config, items, ledger, values.only);
   console.log(`${items.length} item(s) marked to announce; ${pending.length} delivery(ies) pending.`);
   if (pending.length === 0) return 0;
 

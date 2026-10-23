@@ -1,4 +1,4 @@
-import { type Config, enabledTargets } from "./config.ts";
+import { type Config, enabledTargets, type TargetConfig } from "./config.ts";
 import { Ledger } from "./ledger.ts";
 import { DEFAULT_TEMPLATE, render } from "./render.ts";
 import { TARGETS } from "./targets/index.ts";
@@ -13,14 +13,30 @@ export interface Pending {
 }
 
 /** Every (item, target) pair the ledger has not seen, oldest item first. */
-export function plan(config: Config, items: Item[], ledger: Ledger): Pending[] {
+export function plan(config: Config, items: Item[], ledger: Ledger, onlyTargets?: string[]): Pending[] {
   const ordered = [...items].sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
   const out: Pending[] = [];
-  for (const item of ordered)
-    for (const [name, t] of enabledTargets(config)) {
+  for (const item of ordered) {
+    let targetsToCheck: [string, TargetConfig][];
+    
+    if (onlyTargets) {
+      // Validate that all onlyTargets are known
+      const knownTargets = Object.keys(config.targets);
+      const unknownTargets = onlyTargets.filter(target => !knownTargets.includes(target));
+      if (unknownTargets.length > 0) {
+        throw new Error(`unknown target(s): ${unknownTargets.join(", ")}. Known targets: ${knownTargets.join(", ")}`);
+      }
+      
+      targetsToCheck = Object.entries(config.targets).filter(([name]) => onlyTargets.includes(name));
+    } else {
+      targetsToCheck = enabledTargets(config);
+    }
+    
+    for (const [name, t] of targetsToCheck) {
       if (ledger.delivered(item.id, name)) continue;
       out.push({ item, target: name, type: t.type, message: render(t.template ?? DEFAULT_TEMPLATE, item) });
     }
+  }
   return out;
 }
 
