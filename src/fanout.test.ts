@@ -280,9 +280,30 @@ test("facebook-page: uses api_version when specified", async () => {
   const env = { FB_PAGE_TOKEN: "token123" };
   const items = itemsFromFeed(feed([item("a", true)]));
   await deliver(config, plan(config, items, ledger), ledger, env, f.fn);
-  
+
   // Check URL with custom API version
   assert.equal(f.calls[0].url, "https://graph.facebook.com/v17.0/123/feed");
+});
+
+test("facebook-page: a Meta error becomes a thrown message without the token", async () => {
+  const token = "token123";
+  const metaFetch: Fetch = async () =>
+    new Response(JSON.stringify({ error: { message: "Invalid OAuth access token" } }), { status: 401 });
+  const ctx = {
+    name: "fb",
+    message: "Title a: Summary a\nhttps://site.example/a/",
+    env: { FB_PAGE_TOKEN: token },
+    fetch: metaFetch,
+  };
+  const items = itemsFromFeed(feed([item("a", true)]));
+  await assert.rejects(
+    facebookPage.post(items[0], { type: "facebook-page", page_id: "123", token_env: "FB_PAGE_TOKEN" }, ctx),
+    (e: Error) => {
+      assert.match(e.message, /Invalid OAuth access token/);
+      assert.doesNotMatch(e.message, new RegExp(token));
+      return true;
+    },
+  );
 });
 
 
