@@ -4,6 +4,7 @@ import { ConfigError, enabledTargets, loadConfig } from "./config.ts";
 import { loadFeed } from "./feed.ts";
 import { Ledger } from "./ledger.ts";
 import { deliver, plan, problems, seed } from "./run.ts";
+import { TARGETS } from "./targets/index.ts";
 
 const USAGE = `fanout: announce what a site publishes, everywhere it should go.
 
@@ -13,6 +14,8 @@ const USAGE = `fanout: announce what a site publishes, everywhere it should go.
   fanout seed            record everything pending as done without posting
                          (run once when adopting fanout on a site with history)
   fanout targets         each target and whether it could post live right now
+  fanout login <target>  sign in once in a target's own browser profile
+                         (facebook-group; waits until that browser is closed)
 
 Options:
   --config FILE   the project's fanout.json (default ./fanout.json)
@@ -33,13 +36,29 @@ async function main(argv: string[]): Promise<number> {
     },
   });
   const cmd = positionals[0] ?? "plan";
-  if (values.help || !["plan", "run", "seed", "targets"].includes(cmd)) {
+  if (values.help || !["plan", "run", "seed", "targets", "login"].includes(cmd)) {
     process.stdout.write(USAGE);
     return values.help ? 0 : 2;
   }
   const config = loadConfig(values.config!);
   if (values.ledger) config.ledger = values.ledger;
   const env = process.env;
+
+  if (cmd === "login") {
+    const name = positionals[1];
+    const t = name ? config.targets[name] : undefined;
+    if (!name || !t) {
+      console.error(`fanout login: no target named "${name ?? ""}" in ${values.config}`);
+      return 2;
+    }
+    const login = TARGETS[t.type].login;
+    if (!login) {
+      console.error(`fanout login: "${t.type}" targets don't need a sign-in step`);
+      return 2;
+    }
+    await login(t);
+    return 0;
+  }
 
   if (cmd === "targets") {
     const p = problems(config, env);

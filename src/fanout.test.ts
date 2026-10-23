@@ -8,6 +8,8 @@ import { itemsFromFeed } from "./feed.ts";
 import { Ledger } from "./ledger.ts";
 import { render } from "./render.ts";
 import { deliver, plan, problems, seed } from "./run.ts";
+import type { Context } from "./targets/index.ts";
+import { facebookGroup, loadPlaywright, postToPage, type FacebookPage } from "./targets/facebook-group.ts";
 import type { Fetch } from "./types.ts";
 
 const DISCORD = "https://discord.com/api/webhooks/1/abc";
@@ -124,4 +126,82 @@ test("the ledger survives a corrupt line by naming it", () => {
   const { config } = setup();
   writeFileSync(config.ledger, '{"item":"a","target":"d","status":"posted","at":"x"}\nnot json\n');
   assert.throws(() => new Ledger(config.ledger), /ledger\.jsonl:2: not JSON/);
+});
+
+/** A fake page: no browser, just a record of what was asked of it. */
+function fakePage(opts: { signedIn?: boolean; posted?: boolean } = {}) {
+  const calls: string[] = [];
+  let filled = "";
+  const page: FacebookPage = {
+    async open(url) {
+      calls.push(`open:${url}`);
+    },
+    async isSignedIn() {
+      return opts.signedIn ?? true;
+    },
+    async fill(message) {
+      calls.push("fill");
+      filled = message;
+    },
+    async clickPost() {
+      calls.push("clickPost");
+    },
+    async waitForPosted() {
+      calls.push("waitForPosted");
+      return opts.posted ?? true;
+    },
+    async close() {
+      calls.push("close");
+    },
+  };
+  return { page, calls, filled: () => filled };
+}
+
+const fbCtx: Context = { name: "g", message: "Hello group", env: {}, fetch: fetch as Fetch };
+
+test("facebook-group: assist mode fills the message and waits, without clicking Post", async () => {
+  const { page, calls } = fakePage();
+  await postToPage(page, { type: "facebook-group", group_url: "https://www.facebook.com/groups/1" }, fbCtx);
+  assert.deepEqual(calls, ["open:https://www.facebook.com/groups/1", "fill", "waitForPosted", "close"]);
+});
+
+test("facebook-group: auto mode clicks Post", async () => {
+  const { page, calls, filled } = fakePage();
+  await postToPage(page, { type: "facebook-group", group_url: "https://www.facebook.com/groups/1", mode: "auto" }, fbCtx);
+  assert.deepEqual(calls, ["open:https://www.facebook.com/groups/1", "fill", "clickPost", "waitForPosted", "close"]);
+  assert.equal(filled(), "Hello group");
+});
+
+test("facebook-group: a timeout waiting for Post is an error", async () => {
+  const { page } = fakePage({ posted: false });
+  await assert.rejects(
+    postToPage(page, { type: "facebook-group", group_url: "https://www.facebook.com/groups/1" }, fbCtx),
+    /timed out waiting for Post/,
+  );
+});
+
+test("facebook-group: a signed-out page throws, never typing credentials", async () => {
+  const { page, calls } = fakePage({ signedIn: false });
+  await assert.rejects(
+    postToPage(page, { type: "facebook-group", group_url: "https://www.facebook.com/groups/1" }, fbCtx),
+    /not signed in: run fanout login <target> first/,
+  );
+  assert.deepEqual(calls, ["open:https://www.facebook.com/groups/1", "close"]);
+});
+
+test("facebook-group: a missing Playwright throws the install hint", async () => {
+  await assert.rejects(
+    loadPlaywright(() => Promise.reject(new Error("Cannot find module 'playwright'"))),
+    /facebook-group needs Playwright: npm install playwright && npx playwright install chromium/,
+  );
+});
+
+test("facebook-group: check() rejects a group_url that isn't a facebook.com group", () => {
+  assert.deepEqual(facebookGroup.check({ type: "facebook-group", group_url: "https://example.com/groups/1" }, {}), [
+    "group_url must be a facebook.com/groups/... URL",
+  ]);
+  assert.deepEqual(
+    facebookGroup.check({ type: "facebook-group", group_url: "https://www.facebook.com/groups/1" }, {}),
+    [],
+  );
 });
