@@ -1,0 +1,127 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { ConfigError, parseConfig } from "./config.ts";
+import { itemsFromFeed } from "./feed.ts";
+import { Ledger } from "./ledger.ts";
+import { render } from "./render.ts";
+import { deliver, plan, problems, seed } from "./run.ts";
+import type { Fetch } from "./types.ts";
+
+const DISCORD = "https://discord.com/api/webhooks/1/abc";
+const SLACK = "https://hooks.slack.com/services/T/B/x";
+
+const feed = (items: object[]) => ({ version: "https://jsonfeed.org/version/1.1", title: "t", items });
+const item = (id: string, announce: boolean | undefined, extra: object = {}) => ({
+  id,
+  url: `https://site.example/${id}/`,
+  title: `Title ${id}`,
+  summary: `Summary ${id}`,
+  date_published: `2026-0${id.length}-01`,
+  ...(announce === undefined ? {} : { _fanout: { announce } }),
+  ...extra,
+});
+
+function setup(targets: object = { d: { type: "discord", webhook_env: "D" }, s: { type: "slack", webhook_env: "S" } }) {
+  const dir = mkdtempSync(join(tmpdir(), "fanout-"));
+  const config = parseConfig({ source: { type: "jsonfeed", url: "feed.json" }, ledger: "ledger.jsonl", targets }, dir);
+  return { dir, config, ledger: new Ledger(config.ledger) };
+}
+
+/** A fetch that records each request and answers like the target would. */
+function fakeFetch(fail: string[] = []) {
+  const calls: { url: string; body: any }[] = [];
+  const fn: Fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, body: JSON.parse(String(init?.body)) });
+    if (fail.some((f) => url.startsWith(f))) return new Response("nope", { status: 500 });
+    if (url.startsWith(DISCORD)) return Response.json({ id: "m1", channel_id: "c1" });
+    return new Response("ok");
+  };
+  return { fn, calls };
+}
+
+test("only items the feed marks announce: true are announced", () => {
+  const items = itemsFromFeed(feed([item("a", true), item("b", false), item("c", undefined)]));
+  assert.deepEqual(items.map((i) => i.id), ["a"]);
+});
+
+test("a document that is not a JSON Feed is rejected", () => {
+  assert.throws(() => itemsFromFeed({ items: [] }), /not a JSON Feed/);
+});
+
+test("render: the editor's text wins; without it, title and summary", () => {
+  const [withText] = itemsFromFeed(feed([item("a", true, { _fanout: { announce: true, text: "Custom words" } })]));
+  const [plain] = itemsFromFeed(feed([item("b", true)]));
+  assert.equal(render("{text}\n{url}", withText), "Custom words\nhttps://site.example/a/");
+  assert.equal(render("{text}", plain), "Title b: Summary b");
+});
+
+test("render: a typo'd placeholder is an error, not posted text", () => {
+  const [i] = itemsFromFeed(feed([item("a", true)]));
+  assert.throws(() => render("{tilte}", i), /\{tilte\} is not one of/);
+});
+
+test("config: an unknown target type is rejected with its name", () => {
+  assert.throws(() => setup({ x: { type: "myspace" } }), (e: Error) => e instanceof ConfigError && /targets\.x\.type/.test(e.message));
+});
+
+test("plan: every ticked item once per target; a disabled target is skipped", () => {
+  const { config, ledger } = setup({ d: { type: "discord" }, s: { type: "slack", enabled: false } });
+  const p = plan(config, itemsFromFeed(feed([item("a", true), item("bb", true)])), ledger);
+  assert.deepEqual(p.map((x) => `${x.target}:${x.item.id}`), ["d:a", "d:bb"]);
+});
+
+test("deliver posts once; a second run finds nothing pending", async () => {
+  const { config, ledger } = setup();
+  const env = { D: DISCORD, S: SLACK };
+  const items = itemsFromFeed(feed([item("a", true)]));
+  const f = fakeFetch();
+  const r = await deliver(config, plan(config, items, ledger), ledger, env, f.fn);
+  assert.deepEqual(r.map((x) => x.status), ["posted", "posted"]);
+  assert.equal(r[0].remote, "discord:c1/m1");
+  const reread = new Ledger(config.ledger);
+  assert.equal(plan(config, items, reread).length, 0);
+});
+
+test("the exact payloads: Discord pings nobody; Slack unfurls the link", async () => {
+  const { config, ledger } = setup();
+  const f = fakeFetch();
+  await deliver(config, plan(config, itemsFromFeed(feed([item("a", true)])), ledger), ledger, { D: DISCORD, S: SLACK }, f.fn);
+  assert.equal(f.calls[0].url, `${DISCORD}?wait=true`);
+  assert.deepEqual(f.calls[0].body, { content: "Title a: Summary a\nhttps://site.example/a/", allowed_mentions: { parse: [] } });
+  assert.deepEqual(f.calls[1].body, { text: "Title a: Summary a\nhttps://site.example/a/", unfurl_links: true });
+});
+
+test("a failure is recorded, does not stop the others, and is retried next run", async () => {
+  const { config, ledger } = setup();
+  const env = { D: DISCORD, S: SLACK };
+  const items = itemsFromFeed(feed([item("a", true)]));
+  const r = await deliver(config, plan(config, items, ledger), ledger, env, fakeFetch([DISCORD]).fn);
+  assert.deepEqual(r.map((x) => `${x.target}:${x.status}`), ["d:failed", "s:posted"]);
+  assert.deepEqual(plan(config, items, new Ledger(config.ledger)).map((x) => x.target), ["d"]);
+});
+
+test("seed records everything as done without a single request", () => {
+  const { config, ledger } = setup();
+  const items = itemsFromFeed(feed([item("a", true), item("bb", true)]));
+  seed(plan(config, items, ledger), ledger);
+  assert.equal(plan(config, items, new Ledger(config.ledger)).length, 0);
+  const lines = readFileSync(config.ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(lines.every((l) => l.status === "seeded"));
+});
+
+test("problems: a missing or malformed secret blocks a target, by name", () => {
+  const { config } = setup();
+  assert.deepEqual(problems(config, {}), { d: ["D is not set"], s: ["S is not set"] });
+  assert.match(problems(config, { D: "https://example.com", S: SLACK }).d[0], /does not look like a Discord webhook/);
+  assert.deepEqual(problems(config, { D: DISCORD, S: SLACK }), {});
+});
+
+test("the ledger survives a corrupt line by naming it", () => {
+  const { config } = setup();
+  writeFileSync(config.ledger, '{"item":"a","target":"d","status":"posted","at":"x"}\nnot json\n');
+  assert.throws(() => new Ledger(config.ledger), /ledger\.jsonl:2: not JSON/);
+});

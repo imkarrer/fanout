@@ -1,0 +1,6 @@
+# bead-loop: which beads the loop works here and how a worktree is proven.
+# The gate is CI's command verbatim.
+label = "delegate:local"
+base = "main"
+gate = "flox activate -- sh -c 'npm ci --silent && npm run typecheck && npm test'"
+merge = "auto"

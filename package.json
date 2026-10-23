@@ -1,0 +1,14 @@
+{
+  "name": "fanout",
+  "private": true,
+  "type": "module",
+  "description": "Announce what a site publishes on Discord, Slack, Facebook and more, from one feed",
+  "scripts": {
+    "test": "node --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+*.jsonl
+!test/fixtures/*.jsonl
+result-*
