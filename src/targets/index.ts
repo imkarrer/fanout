@@ -2,6 +2,7 @@ import type { TargetConfig } from "../config.ts";
 import type { Env, Fetch, Item, Posted } from "../types.ts";
 import { discord } from "./discord.ts";
 import { facebookGroup } from "./facebook-group.ts";
+import { facebookPage } from "./facebook-page.ts";
 import { slack } from "./slack.ts";
 
 /** What every adapter is handed besides the item. */
@@ -30,7 +31,7 @@ const notYet = (bead: string): Target => ({
 export const TARGETS: Record<string, Target> = {
   discord,
   slack,
-  "facebook-page": notYet("facebook-page adapter"),
+  "facebook-page": facebookPage,
   "facebook-group": facebookGroup,
 };
 

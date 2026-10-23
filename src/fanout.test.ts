@@ -11,6 +11,7 @@ import { deliver, plan, problems, seed } from "./run.ts";
 import type { Context } from "./targets/index.ts";
 import { facebookGroup, loadPlaywright, postToPage, type FacebookPage } from "./targets/facebook-group.ts";
 import type { Fetch } from "./types.ts";
+import { facebookPage } from "./targets/facebook-page.ts";
 
 const DISCORD = "https://discord.com/api/webhooks/1/abc";
 const SLACK = "https://hooks.slack.com/services/T/B/x";
@@ -37,9 +38,26 @@ function fakeFetch(fail: string[] = []) {
   const calls: { url: string; body: any }[] = [];
   const fn: Fetch = async (input, init) => {
     const url = String(input);
-    calls.push({ url, body: JSON.parse(String(init?.body)) });
+    // Handle URL-encoded bodies for facebook-page
+    let body: any = {};
+    if (init?.body) {
+      const bodyString = String(init.body);
+      if (bodyString.startsWith("message=")) {
+        // URL-encoded body - parse it
+        const params = new URLSearchParams(bodyString);
+        body = {};
+        for (const [key, value] of params.entries()) {
+          body[key] = value;
+        }
+      } else {
+        // JSON body
+        body = JSON.parse(bodyString);
+      }
+    }
+    calls.push({ url, body });
     if (fail.some((f) => url.startsWith(f))) return new Response("nope", { status: 500 });
     if (url.startsWith(DISCORD)) return Response.json({ id: "m1", channel_id: "c1" });
+    if (url.startsWith("https://graph.facebook.com/")) return Response.json({ id: "xyz" });
     return new Response("ok");
   };
   return { fn, calls };
@@ -204,4 +222,65 @@ test("facebook-group: check() rejects a group_url that isn't a facebook.com grou
     facebookGroup.check({ type: "facebook-group", group_url: "https://www.facebook.com/groups/1" }, {}),
     [],
   );
+});
+
+test("facebook-page: check() validates page_id and token_env", () => {
+  // Valid configuration
+  assert.deepEqual(
+    facebookPage.check({ type: "facebook-page", page_id: "123", token_env: "FB_PAGE_TOKEN" }, { FB_PAGE_TOKEN: "token123" }),
+    [],
+  );
+  
+  // Invalid page_id - empty string
+  assert.deepEqual(
+    facebookPage.check({ type: "facebook-page", page_id: "", token_env: "FB_PAGE_TOKEN" }, { FB_PAGE_TOKEN: "token123" }),
+    ["page_id must be a non-empty string"],
+  );
+  
+  // Invalid page_id - not digits
+  assert.deepEqual(
+    facebookPage.check({ type: "facebook-page", page_id: "abc", token_env: "FB_PAGE_TOKEN" }, { FB_PAGE_TOKEN: "token123" }),
+    ["page_id must be a string of digits"],
+  );
+  
+  // Invalid token_env - not set
+  assert.deepEqual(
+    facebookPage.check({ type: "facebook-page", page_id: "123", token_env: "FB_PAGE_TOKEN" }, {}),
+    ["FB_PAGE_TOKEN is not set"],
+  );
+  
+  // Invalid token_env - missing variable name
+  assert.deepEqual(
+    facebookPage.check({ type: "facebook-page", page_id: "123", token_env: "" }, {}),
+    ["set token_env to the name of the environment variable holding the access token"],
+  );
+});
+
+test("facebook-page: posts with correct URL and body", async () => {
+  const { config, ledger } = setup({ fb: { type: "facebook-page", page_id: "123", token_env: "FB_PAGE_TOKEN" } });
+  const f = fakeFetch();
+  const env = { FB_PAGE_TOKEN: "token123" };
+  const items = itemsFromFeed(feed([item("a", true)]));
+  await deliver(config, plan(config, items, ledger), ledger, env, f.fn);
+  
+  // Check URL
+  assert.equal(f.calls[0].url, "https://graph.facebook.com/v23.0/123/feed");
+  
+  // Check body has exactly message, link, access_token
+  const body = f.calls[0].body;
+  assert.equal(body.message, "Title a: Summary a\nhttps://site.example/a/");
+  assert.equal(body.link, "https://site.example/a/");
+  assert.equal(body.access_token, "token123");
+  assert.equal(Object.keys(body).length, 3); // Only these three fields
+});
+
+test("facebook-page: uses api_version when specified", async () => {
+  const { config, ledger } = setup({ fb: { type: "facebook-page", page_id: "123", token_env: "FB_PAGE_TOKEN", api_version: "v17.0" } });
+  const f = fakeFetch();
+  const env = { FB_PAGE_TOKEN: "token123" };
+  const items = itemsFromFeed(feed([item("a", true)]));
+  await deliver(config, plan(config, items, ledger), ledger, env, f.fn);
+  
+  // Check URL with custom API version
+  assert.equal(f.calls[0].url, "https://graph.facebook.com/v17.0/123/feed");
 });

@@ -71,7 +71,7 @@ or the first live run announces the whole back catalogue.
 | --- | --- | --- |
 | `discord` | A channel webhook | Anywhere, CI included |
 | `slack` | An incoming webhook | Anywhere, CI included |
-| `facebook-page` | Meta's Graph API and a page token | Anywhere, CI included (planned) |
+| `facebook-page` | Meta's Graph API and a page token | Anywhere, CI included |
 | `facebook-group` | A real browser (Playwright), signed in as a group member | A machine with that browser profile |
 
 Facebook removed the API for posting to groups in 2024, so the group target
