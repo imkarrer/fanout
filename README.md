@@ -80,18 +80,7 @@ can trip their spam checks, so its default `assist` mode fills in the post
 and waits for a person to click Post; `auto` posts unattended at your own
 risk. See [docs/adr/0003](docs/adr/0003-facebook-groups-through-a-browser.md).
 
-### Setting up `facebook-group`
-
-```bash
-npm install playwright && npx playwright install chromium
-fanout login club-group   # opens the group in its own browser profile; sign in once, then close it
-```
-
-`profile_dir` (default suggestion: `~/.local/share/fanout/facebook-profile`)
-holds that signed-in session; keep it out of git. `fanout run --live` then
-opens the group in that profile, fills in the post and, in `assist` mode,
-waits for a person to click Post (`timeout_s`, default 600); `auto` clicks it
-itself. This target needs a real display (no CI).
+See [docs/targets.md](docs/targets.md) for setup instructions for each target.
 
 ## Development
 
